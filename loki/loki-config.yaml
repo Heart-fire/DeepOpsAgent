@@ -1,0 +1,47 @@
+# Loki 单机极简配置（演示用）
+# 关键点：
+#   1. reject_old_samples: false —— 允许 LokiPushRunner 灌入"过去几分钟"的日志（默认会拒绝 1 周以前的样本）
+#   2. tsdb + schema v13 + filesystem —— 单机可用的最简存储后端，无需额外依赖
+#   3. ring 用 inmemory —— 单实例足够，免去 etcd/consul
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # 允许灌入历史时间戳日志（CommandLineRunner 用减几分钟的时间戳灌数据）
+  reject_old_samples: false
+  reject_old_samples_max_age: 168h
+  # 推送和查询的宽松上限，演示场景避免被默认 limit 卡住
+  max_query_length: 0
+  retention_period: 72h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+
+analytics:
+  reporting_enabled: false

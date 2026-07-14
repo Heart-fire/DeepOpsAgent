@@ -1,0 +1,21 @@
+# Loki 单机版 —— 用于 OnCall Agent 的日志查询数据源
+# 启动: docker compose -f loki.yml up -d
+# 停止: docker compose -f loki.yml down
+# 查看: docker logs -f oncall-loki
+#
+# 设计取舍：独立 compose，不和 vector-database.yml 合并。
+# Milvus 全家桶重、启动慢；Loki 要能独立快起快停，便于演示与排障。
+# 不加 Promtail —— 演示数据由 Java 侧 LokiPushRunner 直接 push，更可控。
+services:
+  loki:
+    container_name: oncall-loki
+    image: grafana/loki:2.9.10
+    ports:
+      - "3100:3100"   # Loki HTTP API（query / query_range / push / labels）
+    volumes:
+      # 挂载本地配置文件覆盖镜像默认配置
+      - ./loki/loki-config.yaml:/etc/loki/local-config.yaml
+      # 数据持久化到宿主机，重启容器不丢演示日志
+      - ./volumes/loki:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
