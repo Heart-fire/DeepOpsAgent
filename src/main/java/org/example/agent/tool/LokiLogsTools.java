@@ -7,6 +7,7 @@ import lombok.Data;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import org.example.agent.guard.StepBudgetGuard;
 import org.example.observability.AgentTraceRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,10 @@ public class LokiLogsTools {
     @Autowired
     private AgentTraceRecorder agentTraceRecorder;
 
+    /** 步数预算守卫：总量限流 + 同工具失败熔断，超限返回结构化收敛信号 */
+    @Autowired
+    private StepBudgetGuard stepBudgetGuard;
+
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter
             .ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.of("Asia/Shanghai"));
@@ -95,6 +100,9 @@ public class LokiLogsTools {
             @ToolParam(description = "时间范围（分钟），默认 60") Integer rangeMinutes,
             @ToolParam(description = "返回日志条数，默认 20，最大 100") Integer limit) {
 
+        if (!stepBudgetGuard.tryAcquire(TOOL_QUERY_LOGS)) {
+            return stepBudgetGuard.blockedResponse(TOOL_QUERY_LOGS);
+        }
         long t0 = System.currentTimeMillis();
         String safeLogql = (logql == null || logql.isBlank()) ? "{job=\"application-logs\"}" : logql;
         int actualRange = (rangeMinutes == null || rangeMinutes <= 0) ? 60 : rangeMinutes;
@@ -112,6 +120,7 @@ public class LokiLogsTools {
                 logs = queryRange(safeLogql, actualRange, actualLimit);
                 logger.info("Loki 查询完成: logql={} 返回 {} 条日志", safeLogql, logs.size());
             }
+            stepBudgetGuard.recordResult(TOOL_QUERY_LOGS, true);
 
             QueryLogsOutput output = new QueryLogsOutput();
             output.setSuccess(true);
@@ -128,6 +137,7 @@ public class LokiLogsTools {
         } catch (Exception e) {
             logger.error("查询 Loki 日志失败", e);
             status = "ERROR";
+            stepBudgetGuard.recordResult(TOOL_QUERY_LOGS, false);
             result = buildErrorResponse("查询 Loki 失败: " + e.getMessage());
             return result;
         } finally {
@@ -142,6 +152,9 @@ public class LokiLogsTools {
     @Tool(description = "List available log labels in Loki (service, job, level). " +
             "Call this first if you are unsure which labels exist before writing a LogQL query.")
     public String getAvailableLogStreams() {
+        if (!stepBudgetGuard.tryAcquire(TOOL_GET_AVAILABLE_LOG_STREAMS)) {
+            return stepBudgetGuard.blockedResponse(TOOL_GET_AVAILABLE_LOG_STREAMS);
+        }
         long t0 = System.currentTimeMillis();
         String result = null;
         String status = "OK";
@@ -152,10 +165,12 @@ public class LokiLogsTools {
             output.setStreams(streams);
             output.setMessage(String.format("共 %d 个可用标签", streams.size()));
             result = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(output);
+            stepBudgetGuard.recordResult(TOOL_GET_AVAILABLE_LOG_STREAMS, true);
             return result;
         } catch (Exception e) {
             logger.error("获取 Loki 标签失败", e);
             status = "ERROR";
+            stepBudgetGuard.recordResult(TOOL_GET_AVAILABLE_LOG_STREAMS, false);
             result = buildErrorResponse("获取标签失败: " + e.getMessage());
             return result;
         } finally {
@@ -262,6 +277,7 @@ public class LokiLogsTools {
             if (!response.isSuccessful()) {
                 return list;
             }
+            assert response.body() != null;
             JsonNode root = objectMapper.readTree(response.body().string());
             JsonNode data = root.path("data");
             for (JsonNode label : data) {

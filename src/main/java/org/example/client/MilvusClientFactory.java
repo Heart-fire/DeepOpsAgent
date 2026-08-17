@@ -159,12 +159,12 @@ public class MilvusClientFactory {
      * 为 collection 创建索引
      */
     private void createIndexes(MilvusServiceClient client) {
-        // 为 vector 字段创建索引（FloatVector 使用 IVF_FLAT 和 L2 距离）
+        // 为 vector 字段创建索引（FloatVector 使用 IVF_FLAT 和 COSINE 相似度）
         CreateIndexParam vectorIndexParam = CreateIndexParam.newBuilder()
                 .withCollectionName(MilvusConstants.MILVUS_COLLECTION_NAME)
                 .withFieldName("vector")
                 .withIndexType(IndexType.IVF_FLAT)
-                .withMetricType(MetricType.L2)  // L2 距离（欧氏距离）
+                .withMetricType(MetricType.COSINE)  // 余弦相似度：语义向量看方向不看模长
                 .withExtraParam("{\"nlist\":128}")
                 .withSyncMode(Boolean.FALSE)
                 .build();

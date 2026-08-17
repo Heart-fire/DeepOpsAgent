@@ -13,9 +13,9 @@ public class MilvusConstants {
     public static final String MILVUS_COLLECTION_NAME = "biz";
     
     /**
-     * 向量维度（豆包 embedding 模型的维度）
+     * 向量维度（DashScope text-embedding-v4 模型的维度）
      */
-    public static final int VECTOR_DIM = 1024;  // 豆包模型返回1024维向量
+    public static final int VECTOR_DIM = 1024;  // text-embedding-v4 返回 1024 维向量
     
     /**
      * ID字段最大长度

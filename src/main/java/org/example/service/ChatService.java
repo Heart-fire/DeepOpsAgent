@@ -99,24 +99,38 @@ public class ChatService {
     }
 
     /**
-     * 构建系统提示词（包含历史消息）
-     * @param history 历史消息列表
+     * 构建系统提示词（历史摘要 + 最近 N 轮完整保留的混合策略）。
+     *
+     * 上下文结构（Token 预算口径）：
+     *   基础角色说明（固定）
+     *   + 历史摘要（窗口外历史经 LLM 滚动压缩，≤300 字，保"诉求/结论/关键实体"）
+     *   + 最近 N 轮完整对话（chat-history.recent-pairs，保细节与指代）
+     *
+     * @param summary  窗口外历史摘要（无摘要传空串）
+     * @param history  最近 N 轮完整历史消息
      * @return 完整的系统提示词
      */
-    public String buildSystemPrompt(List<Map<String, String>> history) {
+    public String buildSystemPrompt(String summary, List<Map<String, String>> history) {
         StringBuilder systemPromptBuilder = new StringBuilder();
-        
+
         // 基础系统提示
         systemPromptBuilder.append("你是一个专业的智能运维助手，可以获取当前时间、搜索内部文档知识库、查询服务器实时监控指标（CPU/内存/磁盘），以及查询 Prometheus 告警。\n");
         systemPromptBuilder.append("当用户询问时间相关问题时，使用 getCurrentDateTime 工具。\n");
-        systemPromptBuilder.append("当用户需要查询公司内部文档、流程、最佳实践或技术指南时，使用 queryInternalDocs 工具。\n");
+        systemPromptBuilder.append("当用户需要查询公司内部文档、流程、最佳实践或技术指南时，使用 queryInternalDocs 工具（可按 service、docType 元数据过滤）。\n");
         systemPromptBuilder.append("当用户询问服务器当前的资源使用情况（CPU使用率、内存使用率、磁盘使用率、系统负载等具体数值）时，使用 queryMetric 工具，工具说明中已提供常用 PromQL 示例，按需选用。\n");
         systemPromptBuilder.append("当用户需要查询哪些 Prometheus 告警正在触发时，使用 queryPrometheusAlerts 工具。\n");
         systemPromptBuilder.append("当用户需要查询应用日志、系统日志、慢查询日志时，使用 queryLogs 工具（基于 Loki，用 LogQL 语法查询，例如 {service=\"payment-service\"} |= \"CPU\"）；不确定有哪些标签时可先调用 getAvailableLogStreams 了解可用标签。\n\n");
-        
-        // 添加历史消息
-        if (!history.isEmpty()) {
-            systemPromptBuilder.append("--- 对话历史 ---\n");
+
+        // 历史摘要（窗口外历史压缩）
+        if (summary != null && !summary.isBlank()) {
+            systemPromptBuilder.append("--- 更早对话摘要（历史压缩，细节可能已丢失） ---\n");
+            systemPromptBuilder.append(summary.trim()).append("\n");
+            systemPromptBuilder.append("--- 摘要结束 ---\n\n");
+        }
+
+        // 添加最近 N 轮完整历史
+        if (history != null && !history.isEmpty()) {
+            systemPromptBuilder.append("--- 最近对话（完整保留） ---\n");
             for (Map<String, String> msg : history) {
                 String role = msg.get("role");
                 String content = msg.get("content");
@@ -126,11 +140,11 @@ public class ChatService {
                     systemPromptBuilder.append("助手: ").append(content).append("\n");
                 }
             }
-            systemPromptBuilder.append("--- 对话历史结束 ---\n\n");
+            systemPromptBuilder.append("--- 最近对话结束 ---\n\n");
         }
-        
+
         systemPromptBuilder.append("请基于以上对话历史，回答用户的新问题。");
-        
+
         return systemPromptBuilder.toString();
     }
 

@@ -71,6 +71,25 @@ document:
 rag:
   top-k: 3  # 检索返回的最相似文档数量
   model: "qwen3-max"  # 大语言模型名称
+  hybrid-enabled: true   # Dense(Milvus)+Sparse(BM25) 混合检索 + RRF 融合；false 退回纯 Dense
+  rrf-k: 60              # RRF 融合常数（业界通用值，越小头部权重越集中）
+  sparse-candidate-limit: 500  # Sparse/BM25 候选集上限（演示规模全量候选，生产换 Milvus 原生 BM25）
+
+# 会话历史管理（历史摘要 + 最近 N 轮完整保留）
+chat-history:
+  recent-pairs: 6         # 最近 N 轮完整保留（窗口大小，单位=消息对）
+  storage-enabled: false  # true=Redis+MySQL 分层存储（需配置 datasource/redis）；false=内存版（零依赖）
+  summarizer-model: qwen-turbo  # 摘要压缩用小模型（低成本，摘要本身允许有损）
+  datasource:             # storage-enabled=true 时生效（HikariCP 绑定 chat-history.datasource）
+    jdbc-url: jdbc:mysql://localhost:3306/deepops?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+    maximum-pool-size: 8
+  redis:
+    host: localhost
+    port: 6379
+
+# Agent 步数预算（最大步数限制：代码级硬限，超限收敛而非报错）—— 已并入下方 aiops 块
 
 # Prometheus 配置
 prometheus:
@@ -91,12 +110,14 @@ loki:
   timeout: 10  # 超时时间（秒）
   mock-enabled: false
 
-# AI Ops 多 Agent 模型路由配置
+# AI Ops 多 Agent 模型路由配置 + Agent 步数预算
 # 规划/复杂推理用强模型（qwen-max），单步执行/工具调用用小模型（qwen-turbo）控制成本
 aiops:
   planner-model: qwen-max      # Planner + Supervisor 用，低温保证严谨
   executor-model: qwen-turbo   # Executor 用，省钱省延迟
   chat-model: qwen-max         # 普通对话用，作为 Prometheus token 指标的 model tag
+  max-tool-calls: 18           # 一次会话工具调用总预算（典型诊断链路 5-8 次，留足 Replan 空间）；超限返回收敛信号
+  tool-fail-threshold: 3       # 同一工具连续失败熔断阈值（把提示词软限升级为代码硬限）
 
 # Actuator / Micrometer 监控端点暴露
 # 依赖已有 spring-boot-starter-actuator + micrometer-registry-prometheus

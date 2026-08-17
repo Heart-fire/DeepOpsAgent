@@ -7,10 +7,12 @@ import lombok.Data;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import org.example.agent.guard.StepBudgetGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -32,18 +34,26 @@ public class QueryMetricsTools {
     
     /** 工具名常量，用于动态构建提示词 */
     public static final String TOOL_QUERY_PROMETHEUS_ALERTS = "queryPrometheusAlerts";
-    
+    public static final String TOOL_QUERY_METRIC = "queryMetric";
+
+    /** 单次指标查询返回样本数上限（超出截断为 TopN + 总数说明，防止大结果集挤占上下文） */
+    private static final int MAX_SAMPLES = 20;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
-    
+
     @Value("${prometheus.base-url}")
     private String prometheusBaseUrl;
-    
+
     @Value("${prometheus.timeout:10}")
     private int timeout;
-    
+
     @Value("${prometheus.mock-enabled:false}")
     private boolean mockEnabled;
-    
+
+    /** 步数预算守卫：总量限流 + 同工具失败熔断，超限返回结构化收敛信号 */
+    @Autowired
+    private StepBudgetGuard stepBudgetGuard;
+
     private OkHttpClient httpClient;
     
     @jakarta.annotation.PostConstruct
@@ -63,63 +73,74 @@ public class QueryMetricsTools {
             "This tool retrieves all currently active/firing alerts including their labels, annotations, state, and values. " +
             "Use this tool when you need to check what alerts are currently firing, investigate alert conditions, or monitor alert status.")
     public String queryPrometheusAlerts() {
+        if (!stepBudgetGuard.tryAcquire(TOOL_QUERY_PROMETHEUS_ALERTS)) {
+            return stepBudgetGuard.blockedResponse(TOOL_QUERY_PROMETHEUS_ALERTS);
+        }
+        long t0 = System.currentTimeMillis();
+        boolean ok = false;
+        try {
         logger.info("开始查询 Prometheus 活动告警, Mock模式: {}", mockEnabled);
-        
+
         try {
             List<SimplifiedAlert> simplifiedAlerts;
-            
+
             if (mockEnabled) {
                 // Mock 模式：返回与文档关联的模拟告警数据
                 simplifiedAlerts = buildMockAlerts();
                 logger.info("使用 Mock 数据，返回 {} 个模拟告警", simplifiedAlerts.size());
+                ok = true;
             } else {
                 // 真实模式：调用 Prometheus Alerts API
                 PrometheusAlertsResult result = fetchPrometheusAlerts();
-                
+
                 if (!"success".equals(result.getStatus())) {
                     return buildErrorResponse("Prometheus API 返回非成功状态: " + result.getStatus(), result.getError());
                 }
-                
+
                 // 转换为简化格式，对于相同的 alertname，只保留第一个
                 Set<String> seenAlertNames = new HashSet<>();
                 simplifiedAlerts = new ArrayList<>();
-                
+
                 for (PrometheusAlert alert : result.getData().getAlerts()) {
                     String alertName = alert.getLabels().get("alertname");
-                    
+
                     // 如果这个 alertname 已经存在，跳过
                     if (seenAlertNames.contains(alertName)) {
                         continue;
                     }
-                    
+
                     // 标记为已见过
                     seenAlertNames.add(alertName);
-                    
+
                     SimplifiedAlert simplified = new SimplifiedAlert();
                     simplified.setAlertName(alertName);
                     simplified.setDescription(alert.getAnnotations().getOrDefault("description", ""));
                     simplified.setState(alert.getState());
                     simplified.setActiveAt(alert.getActiveAt());
                     simplified.setDuration(calculateDuration(alert.getActiveAt()));
-                    
+
                     simplifiedAlerts.add(simplified);
                 }
+                ok = true;
             }
-            
+
             // 构建成功响应
             PrometheusAlertsOutput output = new PrometheusAlertsOutput();
             output.setSuccess(true);
             output.setAlerts(simplifiedAlerts);
             output.setMessage(String.format("成功检索到 %d 个活动告警", simplifiedAlerts.size()));
-            
+
             String jsonResult = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(output);
             logger.info("Prometheus 告警查询完成: 找到 {} 个告警", simplifiedAlerts.size());
-            
+
             return jsonResult;
-            
+
         } catch (Exception e) {
             logger.error("查询 Prometheus 告警失败", e);
             return buildErrorResponse("查询失败", e.getMessage());
+        }
+        } finally {
+            stepBudgetGuard.recordResult(TOOL_QUERY_PROMETHEUS_ALERTS, ok);
         }
     }
 
@@ -143,9 +164,13 @@ public class QueryMetricsTools {
             "promql (required): the PromQL expression to evaluate.")
     public String queryMetric(
             @ToolParam(description = "PromQL 查询表达式，例如查CPU使用率: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)") String promql) {
-        logger.info("查询 Prometheus 即时指标, PromQL: {}, Mock模式: {}", promql, mockEnabled);
-
+        if (!stepBudgetGuard.tryAcquire(TOOL_QUERY_METRIC)) {
+            return stepBudgetGuard.blockedResponse(TOOL_QUERY_METRIC);
+        }
+        boolean ok = false;
         try {
+            logger.info("查询 Prometheus 即时指标, PromQL: {}, Mock模式: {}", promql, mockEnabled);
+
             List<MetricSample> samples;
             if (mockEnabled) {
                 samples = buildMockMetric(promql);
@@ -154,15 +179,28 @@ public class QueryMetricsTools {
                 samples = fetchInstantQuery(promql);
                 logger.info("Prometheus 即时查询完成: PromQL={} 返回 {} 个样本", promql, samples.size());
             }
+            ok = true;
+
+            // 样本数上限截断（字段裁剪/结果裁剪）：大结果集只保留前 MAX_SAMPLES 个样本 + 总数说明，
+            // 避免按 instance/mountpoint 分组的大 PromQL 结果挤占模型上下文
+            int totalSamples = samples.size();
+            boolean truncated = totalSamples > MAX_SAMPLES;
+            if (truncated) {
+                samples = new ArrayList<>(samples.subList(0, MAX_SAMPLES));
+            }
 
             MetricQueryOutput output = new MetricQueryOutput();
             output.setSuccess(true);
             output.setPromql(promql);
             output.setSamples(samples);
             output.setCount(samples.size());
+            output.setTotalSamples(totalSamples);
             output.setMessage(samples.isEmpty()
                     ? "查询成功但无数据（请检查 PromQL 表达式或指标名是否正确）"
-                    : String.format("成功查询到 %d 个指标样本", samples.size()));
+                    : truncated
+                        ? String.format("查询到 %d 个样本，超出单次返回上限仅保留前 %d 个（如需其余实例请缩小 PromQL 范围）",
+                                totalSamples, MAX_SAMPLES)
+                        : String.format("成功查询到 %d 个指标样本", samples.size()));
 
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(output);
 
@@ -178,6 +216,8 @@ public class QueryMetricsTools {
                 return String.format("{\"success\":false,\"promql\":\"%s\",\"message\":\"%s\"}",
                         promql, e.getMessage());
             }
+        } finally {
+            stepBudgetGuard.recordResult(TOOL_QUERY_METRIC, ok);
         }
     }
 
@@ -464,6 +504,10 @@ public class QueryMetricsTools {
 
         @JsonProperty("count")
         private int count;
+
+        /** 原始样本总数（截断前），与 count 差值即被裁剪部分 */
+        @JsonProperty("total_samples")
+        private Integer totalSamples;
 
         @JsonProperty("message")
         private String message;

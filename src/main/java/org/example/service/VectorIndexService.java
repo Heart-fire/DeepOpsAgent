@@ -236,16 +236,34 @@ public class VectorIndexService {
         metadata.put("_source", normalizedPath);
         metadata.put("_extension", extension);
         metadata.put("_file_name", fileNameStr);
-        
+
         // 分片信息
         metadata.put("chunkIndex", chunk.getChunkIndex());
         metadata.put("totalChunks", totalChunks);
-        
+
         // 标题信息
         if (chunk.getTitle() != null && !chunk.getTitle().isEmpty()) {
             metadata.put("title", chunk.getTitle());
         }
-        
+
+        // 可过滤元数据（供检索侧 withExpr 元数据过滤）。
+        // 演示级推断规则：service 取文件名中形如 xxx-service 的片段，docType 按文件名关键词判定；
+        // 生产演进：上传接口显式传入元数据（表单字段），推断仅作缺省兜底。
+        String lowerName = fileNameStr.toLowerCase();
+        if (lowerName.contains("sop") || lowerName.contains("runbook")) {
+            metadata.put("docType", "sop");
+        } else if (lowerName.contains("case") || lowerName.contains("incident")) {
+            metadata.put("docType", "case");
+        } else if (lowerName.contains("alert")) {
+            metadata.put("docType", "alert");
+        }
+        for (String token : normalizedPath.substring(normalizedPath.lastIndexOf('/') + 1).split("[-_.]")) {
+            if (token.endsWith("service") && token.length() > "service".length()) {
+                metadata.put("service", token);
+                break;
+            }
+        }
+
         return metadata;
     }
 
