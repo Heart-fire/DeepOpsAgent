@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepOps Agent 诊断链路全景图</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d1117; color:#e6edf3; font-family:"Segoe UI",-apple-system,"Microsoft YaHei",sans-serif; font-size:14px; }
+  header { padding:18px 24px; border-bottom:1px solid #30363d; display:flex; flex-wrap:wrap; align-items:center; gap:14px; }
+  header h1 { font-size:18px; }
+  header h1 span { color:#8b949e; font-size:12px; font-weight:normal; margin-left:10px; }
+  .tabs { display:flex; gap:8px; margin-left:auto; }
+  .tab { padding:6px 14px; border:1px solid #30363d; border-radius:16px; cursor:pointer; color:#8b949e; user-select:none; }
+  .tab.active { background:#1f6feb33; border-color:#1f6feb; color:#58a6ff; }
+  .btn { padding:6px 18px; border-radius:6px; border:none; cursor:pointer; font-size:13px; }
+  .btn-play { background:#238636; color:#fff; }
+  .btn-reset { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .layout { display:flex; gap:0; height:calc(100vh - 63px); }
+  /* ===== 左：主链路 ===== */
+  .flow { flex:1 1 58%; overflow-y:auto; padding:24px 30px; }
+  .phase-title { color:#8b949e; font-size:11px; letter-spacing:2px; margin:22px 0 10px; text-transform:uppercase; }
+  .node { position:relative; border:1px solid #30363d; background:#161b22; border-radius:10px; padding:12px 16px; margin-bottom:14px; cursor:pointer; transition:all .25s; border-left:4px solid #30363d; }
+  .node:hover { border-color:#58a6ff; }
+  .node.active { box-shadow:0 0 0 2px #58a6ff; background:#1c2432; transform:translateX(4px); }
+  .node.done { border-left-color:#3fb950; opacity:.75; }
+  .node.rejected { border-left-color:#f85149; }
+  .node .ntitle { font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .node .ntitle .who { font-size:11px; padding:1px 8px; border-radius:10px; }
+  .node .ndesc { color:#8b949e; font-size:12px; margin-top:5px; line-height:1.6; }
+  .node .badges { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+  .badge { font-size:11px; padding:1px 8px; border-radius:8px; background:#21262d; color:#8b949e; border:1px solid #30363d; }
+  .badge.blue { color:#58a6ff; border-color:#1f6feb55; } .badge.orange { color:#f78166; border-color:#f7816655; }
+  .badge.red { color:#f85149; border-color:#f8514955; } .badge.green { color:#3fb950; border-color:#3fb95055; }
+  .badge.purple { color:#a371f7; border-color:#a371f755; }
+  .indent { margin-left:34px; }
+  .indent2 { margin-left:68px; }
+  .arrow { text-align:center; color:#484f58; font-size:15px; margin:-8px 0 6px; }
+  .loopback { border:1px dashed #d29922; background:#161b2288; border-radius:10px; padding:10px 16px; margin:4px 0 14px 34px; color:#d29922; font-size:12px; cursor:pointer; border-left:4px solid #d29922; }
+  .who.sup { background:#a371f722; color:#a371f7; } .who.plan { background:#58a6ff22; color:#58a6ff; }
+  .who.exec { background:#39d2c022; color:#39d2c0; } .who.tool { background:#f7816622; color:#f78166; }
+  .who.guard { background:#f8514922; color:#f85149; } .who.sys { background:#8b949e22; color:#8b949e; }
+  /* ===== 右：详情与日志 ===== */
+  .side { flex:1 1 42%; border-left:1px solid #30363d; display:flex; flex-direction:column; min-width:420px; }
+  .detail { flex:1; overflow-y:auto; padding:20px 24px; }
+  .detail h3 { font-size:15px; margin-bottom:4px; }
+  .detail .src { color:#d29922; font-size:11px; font-family:Consolas,monospace; margin-bottom:12px; }
+  .detail h4 { font-size:12px; color:#8b949e; margin:14px 0 6px; letter-spacing:1px; }
+  .detail p { font-size:13px; line-height:1.8; color:#c9d1d9; }
+  pre.json { background:#010409; border:1px solid #30363d; border-radius:8px; padding:12px; font-family:Consolas,"Courier New",monospace; font-size:11.5px; line-height:1.55; overflow-x:auto; color:#7ee787; white-space:pre; }
+  .console { height:32%; border-top:1px solid #30363d; background:#010409; display:flex; flex-direction:column; }
+  .console .chead { padding:8px 16px; font-size:11px; color:#8b949e; border-bottom:1px solid #21262d; display:flex; justify-content:space-between; }
+  .console .cbody { flex:1; overflow-y:auto; padding:10px 16px; font-family:Consolas,monospace; font-size:11.5px; line-height:1.7; }
+  .logline { white-space:pre-wrap; }
+  .lg-info { color:#8b949e; } .lg-hi { color:#58a6ff; } .lg-ok { color:#3fb950; } .lg-warn { color:#d29922; } .lg-err { color:#f85149; } .lg-tool { color:#f78166; }
+  .legend { padding:10px 24px; border-top:1px solid #30363d; color:#8b949e; font-size:11px; display:flex; gap:16px; flex-wrap:wrap; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DeepOps Agent 诊断链路全景<span>每个节点可点击查看 真实输入/输出/代码出处</span></h1>
+  <div class="tabs">
+    <div class="tab active" data-s="0">剧本① 顺利路径</div>
+    <div class="tab" data-s="1">剧本② Replan（证据缺失→冲突）</div>
+    <div class="tab" data-s="2">剧本③ 预算耗尽收敛</div>
+  </div>
+  <button class="btn btn-play" id="btnPlay">▶ 下一步（0/0）</button>
+  <button class="btn btn-reset" id="btnReset">重置</button>
+  <span style="color:#8b949e;font-size:12px">手动模式：每点一次走一步（或按空格键）</span>
+</header>
+
+<div class="layout">
+<div class="flow" id="flow">
+
+  <div class="phase-title">阶段 0 · 入口与初始化（Tomcat 线程）</div>
+  <div class="node" id="n-user" style="border-left-color:#e6edf3">
+    <div class="ntitle">用户触发智能诊断 <span class="who sys">USER</span></div>
+    <div class="ndesc">POST /api/ai_ops · SSE 长连接（10 分钟超时）· 剧本场景："订单服务最近频繁出现 5xx，帮我诊断"</div>
+  </div>
+  <div class="node" id="n-async" style="border-left-color:#8b949e">
+    <div class="ntitle">异步化：提交独立线程池 <span class="who sys">SYSTEM</span></div>
+    <div class="ndesc">SSE 是长连接（诊断 3-10 分钟），占用 Tomcat 工作线程会拖死 HTTP 容器 → executor.execute() 交给 cachedThreadPool，Tomcat 立即释放</div>
+    <div class="badges"><span class="badge">ChatController.aiOps()</span><span class="badge">Executors.newCachedThreadPool</span></div>
+  </div>
+  <div class="node" id="n-init" style="border-left-color:#d29922">
+    <div class="ntitle">会话初始化：模型路由 + Trace + 步数预算 <span class="who sys">INIT</span></div>
+    <div class="ndesc">① 双模型：Planner=qwen3.7-max(temp 0.3 / maxToken 8000)、Executor=qwen-plus(temp 0.1 / maxToken 4000) ② startTrace 开调用链 ③ StepBudgetGuard 开预算：总 18 次工具调用 + 同工具连续失败 3 次熔断</div>
+    <div class="badges"><span class="badge blue">按失败成本分配模型</span><span class="badge red">预算 18 / 熔断 3</span></div>
+  </div>
+
+  <div class="phase-title">阶段 1 · Supervisor 编排循环（LLM 路由）</div>
+  <div class="node" id="n-sup" style="border-left-color:#a371f7">
+    <div class="ntitle">Supervisor：下一步调谁？ <span class="who sup">SUPERVISOR · qwen3.7-max</span></div>
+    <div class="ndesc">LLM 驱动的路由 Agent（非 if-else 编排器）。系统提示词约定三选一：<b>调 planner_agent 出/调整计划 · 调 executor_agent 执行 · FINISH 输出报告</b>。路由依据 = Planner 最近决策 + Executor 最近反馈</div>
+    <div class="badges"><span class="badge purple">路由决策也消耗 LLM → 共用强模型</span></div>
+  </div>
+
+  <div class="node indent" id="n-plan" style="border-left-color:#58a6ff">
+    <div class="ntitle">Planner：生成/调整诊断计划 <span class="who plan">PLANNER · qwen3.7-max</span></div>
+    <div class="ndesc">读 {input} + {executor_feedback}，输出 decision=PLAN|EXECUTE|FINISH 的 JSON。决策协议只有 30 行提示词——职责单一所以遵循度高</div>
+    <div class="badges"><span class="badge blue">decision=PLAN（点击看输出示例）</span></div>
+  </div>
+
+  <div class="node indent" id="n-exec" style="border-left-color:#39d2c0">
+    <div class="ntitle">Executor：执行单步（内部 ReAct 循环） <span class="who exec">EXECUTOR · qwen-plus</span></div>
+    <div class="ndesc">只执行 Planner 计划的第一步。内部 Thought → Action → Observation 循环决定调哪个工具；产出结构化反馈，<b>不回传原始数据</b></div>
+  </div>
+  <div class="arrow">↓ 每次 Action 前必过</div>
+  <div class="node indent2" id="n-guard" style="border-left-color:#f85149">
+    <div class="ntitle">StepBudgetGuard：预算检查 <span class="who guard">GUARD · 代码级</span></div>
+    <div class="ndesc">tryAcquire(toolName)：总预算未耗尽 且 该工具未被熔断 → 扣 1 次放行；否则返回 STEP_BUDGET_EXHAUSTED 收敛信号（拒绝≠报错，是"带证据收敛"指令）</div>
+    <div class="badges"><span class="badge red">代码硬限（模型不听 prompt 也拦得住）</span></div>
+  </div>
+  <div class="node indent2" id="n-tool" style="border-left-color:#f78166">
+    <div class="ntitle">Tool Calling：6 个诊断工具 <span class="who tool">TOOLS · OkHttp 10s 超时</span></div>
+    <div class="ndesc">queryPrometheusAlerts / queryMetric / queryLogs / getAvailableLogStreams / queryInternalDocs / getCurrentDateTime。统一 JSON 返回（success/data/message），失败返回结构化错误供上层换路</div>
+    <div class="badges"><span class="badge orange">点击看每个工具的真实输出示例</span></div>
+  </div>
+  <div class="node indent2" id="n-trace" style="border-left-color:#8b949e">
+    <div class="ntitle">记录 Span + 成败上报 <span class="who sys">TRACE</span></div>
+    <div class="ndesc">AgentTraceRecorder 记工具 Span（入参/出参/耗时/状态，2000 字截断）；recordResult 报成败——成功清零连续失败计数，失败 +1（达 3 触发熔断）</div>
+  </div>
+  <div class="arrow">↓ 双层上下文压缩（防止 Planner 上下文爆炸）</div>
+  <div class="node indent" id="n-compress" style="border-left-color:#d29922">
+    <div class="ntitle">executor_feedback：结构化摘要回传 <span class="who exec">EXECUTOR</span></div>
+    <div class="ndesc"><b>第一层（代码裁剪）</b>：工具出口截断——queryMetric 超 20 样本只留 20 + total_samples 标注、queryLogs limit≤100。<b>第二层（LLM 摘要）</b>：Executor 读完工具结果整理为 status/summary/evidence/nextHint 四字段 JSON。Planner 永远只看摘要，不碰原始数据</div>
+    <div class="badges"><span class="badge blue">上下文隔离 + 压缩</span></div>
+  </div>
+  <div class="loopback" id="n-replan">↺ REPLAN 循环：Planner 重新评估证据 → 证据不足/冲突/工具失败 → 调整计划 → 再次 Executor（点击看三种触发场景）</div>
+
+  <div class="phase-title">阶段 2 · 收敛与输出</div>
+  <div class="node" id="n-judge" style="border-left-color:#58a6ff">
+    <div class="ntitle">Planner 终局判断 <span class="who plan">PLANNER</span></div>
+    <div class="ndesc">三分支：证据链完整 → decision=FINISH（输出 Markdown 报告）｜证据不足/冲突 → Replan ｜预算耗尽信号 → 被迫 FINISH（报告如实标注未完成项）</div>
+  </div>
+  <div class="node" id="n-report" style="border-left-color:#3fb950">
+    <div class="ntitle">《告警分析报告》固定模板输出 <span class="who plan">PLANNER → FINISH</span></div>
+    <div class="ndesc">活跃告警清单（表格）→ 告警根因分析 N（告警详情/症状/日志证据/根因结论）→ 处理方案执行 N → 结论（整体评估/关键发现/后续建议/风险评估）。所有结论必须引用工具真实返回，严禁编造</div>
+  </div>
+  <div class="node" id="n-finish" style="border-left-color:#3fb950">
+    <div class="ntitle">收尾：Trace 汇总 + SSE 推送 <span class="who sys">SYSTEM</span></div>
+    <div class="ndesc">endTrace 汇总（LLM 轮数/工具次数/总 token，token 同步记入 Micrometer）；报告按 50 字符分块 SSE 推送 → done 标记 → complete；endSession 结算步数预算</div>
+    <div class="badges"><span class="badge green">超限语义 = 收敛，不是失败</span></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot" style="background:#a371f7"></span>Supervisor</span>
+    <span><span class="dot" style="background:#58a6ff"></span>Planner</span>
+    <span><span class="dot" style="background:#39d2c0"></span>Executor</span>
+    <span><span class="dot" style="background:#f78166"></span>Tools</span>
+    <span><span class="dot" style="background:#f85149"></span>Guard</span>
+    <span><span class="dot" style="background:#3fb950"></span>输出</span>
+  </div>
+</div>
+
+<div class="side">
+  <div class="detail" id="detail">
+    <h3>点击左侧任意节点</h3>
+    <p>查看该环节的职责、真实输入/输出 JSON 示例、代码出处与设计理由。右上角选择剧本后点"播放"，控制台会按真实日志格式演示一次完整诊断。</p>
+  </div>
+  <div class="console">
+    <div class="chead"><span>运行日志模拟（对齐真实 logback 输出格式）</span><span id="budgetStatus">预算 0/18 · 熔断 -</span></div>
+    <div class="cbody" id="cbody"><div class="logline lg-info">选择剧本后，每点击一次「下一步」执行一步（支持空格键）</div></div>
+  </div>
+</div>
+</div>
+
+<script>
+// ==================== 节点详情（真实代码口径） ====================
+const D = {
+'n-user': {t:'用户触发智能诊断', s:'POST /api/ai_ops · ChatController',
+ d:`<p>SSE 响应：<code>SseEmitter(600000L)</code>——600000ms = 10 分钟，注释即"告警分析可能较慢"。<b>两种触发模式</b>：</p><pre class="json"># 告警驱动（默认，无参）：拉全量活跃告警，对应 OnCall 告警 webhook 场景
+POST /api/ai_ops
+# 问题驱动（修复后新增）：Planner 围绕用户问题定向排查
+POST /api/ai_ops?question=订单服务最近频繁出现5xx</pre><h4>产品断层的发现与修复</h4><p>初版 ai_ops 不接受输入，"帮我诊断订单服务"只能走 /api/chat 单 Agent 硬串工具（无报告模板/无模型路由）——<b>用户最需要多 Agent 的场景恰恰进不了多 Agent</b>。识别后以可选 question 参数打通：透传至 taskPrompt，空则保持告警驱动语义，两种模式向后兼容。</p>`,
+},
+'n-async': {t:'SSE 异步化', s:'ChatController.aiOps() → executor.execute(...)',
+ d:`<p>线程池 <code>Executors.newCachedThreadPool()</code>。演示级选 cached（按需建线程+60s回收）；生产应换定长+有界队列——SSE 长连接数即并发上限，cached 无上界会线程爆炸（阿里规约禁用 Executors 静态方法的原因）。</p>`,
+},
+'n-init': {t:'会话初始化三件事', s:'ChatController.aiOps() / AgentTraceRecorder / StepBudgetGuard',
+ d:`<p><b>① 模型路由</b>：按失败成本分配——Planner 规划错一步整条链路白跑（重试代价=十几轮调用）→ qwen3.7-max 低温 0.3、maxToken 8000（给长报告留空间）；Executor 单步错 Replan 重来即可但频率最高 → qwen-plus 低温 0.1、4000。</p><p><b>② startTrace</b>：sessionId=aiops-UUID，后续所有 LLM/工具 span 归属此链。</p><p><b>③ beginSession</b>：预算状态初始化，18 次/熔断 3 次为配置项 <code>aiops.max-tool-calls / tool-fail-threshold</code>。</p>`,
+},
+'n-sup': {t:'Supervisor：LLM 路由', s:'AiOpsService → SupervisorAgent.builder().subAgents([planner, executor])',
+ d:`<p>框架的 SupervisorAgent 挂 plannerModel + 调度提示词，<b>用 LLM 决定"下一步调谁"</b>——所以它是路由 Agent，不是 if-else 编排器；也因此与 Planner 共用强模型。</p><h4>调度提示词规则（节选）</h4><pre class="json">1. 需要拆解/重新制定策略 → planner_agent
+2. planner 输出 decision=EXECUTE → executor_agent（执行第一步）
+3. 依据 executor 反馈决定是否再调 planner，直至 FINISH
+4. 同方向连续 3 次失败 → 终止流程，输出"任务无法完成"报告</pre><p>第 4 条是提示词软限；代码层由 StepBudgetGuard 兜底成硬限——双层防循环。</p>`,
+},
+'n-plan': {t:'Planner：PLAN 决策输出', s:'AiOpsService.buildPlannerPrompt() · outputKey="planner_plan"',
+ d:`<p>系统提示词要求输出结构化 JSON 决策。真实输出形态示例：</p><pre class="json">{
+  "decision": "PLAN",
+  "step": "查询订单服务 5xx 时间窗内的错误日志与数据库连接指标",
+  "expected_tools": ["queryLogs", "queryMetric"],
+  "context": "已确认 3 个 firing 告警，5xx 集中在 20:00-20:30"
+}</pre><p>Planner 提示词只含决策协议+报告模板（约 30 行）——职责单一，遵循度高。FINISH 时切换为直接输出 Markdown 报告（不再 JSON）。</p>`,
+},
+'n-exec': {t:'Executor：单步执行（内含 ReAct）', s:'AiOpsService.buildExecutorPrompt() · outputKey="executor_feedback"',
+ d:`<p>PER 管整体流程，<b>ReAct 支撑 Executor 单步内</b> Thought→Action→Observation 循环：Thought 决定调哪个工具 → Action 生成结构化参数 → Observation 读结果再思考。</p><h4>执行纪律（提示词节选）</h4><pre class="json">- 只执行 Planner 计划的第一步
+- 工具返回错误/空数据：记录失败原因与参数，停止进一步调用该工具
+- 同一工具失败达 3 次 → 返回 FAILED
+- 严禁编造未实际查询到的内容</pre>`,
+},
+'n-guard': {t:'StepBudgetGuard：工具调用闸门', s:'agent/guard/StepBudgetGuard.java',
+ d:`<p>tryAcquire 在工具方法<b>入口</b>拦截（执行前扣减）：</p><pre class="json">// 拒绝时返回给模型的收敛信号
+{
+  "success": false,
+  "reason": "STEP_BUDGET_EXHAUSTED",
+  "message": "工具调用预算已耗尽或该工具已被熔断(queryLogs)。
+    请立即停止调用任何工具，基于已收集的证据输出
+    最终诊断报告，并如实说明哪些排查步骤未能完成。"
+}</pre><p><b>语义是收敛不是失败</b>——模型收到后带着已有证据 FINISH。18 = 典型链路 5-8 次 × 2 倍 Replan 余量 + 缓冲；3 = 与提示词软限同源。熔断会话内不恢复，endSession 清零。</p>`,
+},
+'n-tool': {t:'6 个诊断工具（真实输出示例）', s:'agent/tool/ · 4 类 6 方法',
+ d:`<h4>queryPrometheusAlerts</h4><pre class="json">{"success":true,"alerts":[
+ {"alert_name":"HighCPUUsage","state":"firing",
+  "description":"payment-service CPU>80% 当前92%",
+  "active_at":"...","duration":"25m3s"}],
+ "message":"成功检索到 3 个活动告警"}</pre><h4>queryMetric（含样本截断）</h4><pre class="json">{"success":true,"promql":"histogram_quantile(0.99,...)",
+ "samples":[...],"count":20,
+ "total_samples":47,
+ "message":"查询到 47 个样本，超出单次返回上限仅保留前 20 个"}</pre><h4>queryLogs</h4><pre class="json">{"success":true,"logql":"{service=\\"order-service\\"} |= \\"5xx\\"",
+ "range_minutes":30,"limit":20,
+ "logs":[{"timestamp":"2026-08-19 20:14:03","level":"ERROR",
+  "service":"order-service","message":"HTTP 500 ... DB连接超时"}],
+ "total":20,"message":"成功查询到 20 条日志"}</pre><h4>queryInternalDocs（RAG：过滤+混合检索+RRF）</h4><pre class="json">[{"id":"...","content":"# order-service OOM 历史故障案例...",
+  "score":0.83,"fused_score":0.031,
+  "metadata":"{\"service\":\"order-service\",\"docType\":\"case\"}"}]</pre>`,
+},
+'n-trace': {t:'Span 记录 + 成败上报', s:'AgentTraceRecorder.recordToolCurrent / StepBudgetGuard.recordResult',
+ d:`<p>每次工具调用产出一条 Span：input/output（2000 字截断）/durationMs/status，可通过 <code>GET /api/trace/{sessionId}</code> 查询。排查口径：<b>trace 把"模型问题"和"数据问题"分开</b>——工具 span 返回脏数据=数据问题，LLM span 输出跑偏=模型问题。</p><p>已知边界：token 埋点只覆盖流式路径，ai_ops 的 supervisor.invoke() 拿不到 Usage——彻底解法是 ChatModel 调用层统一拦截。</p>`,
+},
+'n-compress': {t:'双层上下文压缩', s:'QueryMetricsTools(MAX_SAMPLES=20) / buildExecutorPrompt',
+ d:`<p><b>第一层·代码裁剪（工具出口）</b>：queryMetric 超 20 样本截断并标注 total_samples；queryLogs limit 钳制 ≤100；RAG top-k=3。</p><p><b>第二层·LLM 摘要（Executor 出口）</b>：</p><pre class="json">{
+  "status": "SUCCESS",
+  "summary": "近30分钟订单服务 47 条 5xx，集中在数据库连接超时",
+  "evidence": "ConnectionPoolExhaustedException active:50/50 waiting:23",
+  "nextHint": "建议查连接池配置与慢查询日志"
+}</pre><p>若不做压缩：Prometheus 原始指标 + Loki 日志 + RAG 文档全塞 Planner → 上下文爆炸、token 成本上升、决策质量下降。</p>`,
+},
+'n-replan': {t:'REPLAN 三种触发场景', s:'buildPlannerPrompt（读 executor_feedback 再决策）',
+ d:`<p><b>① 证据缺失</b>：CPU/内存正常但解释不了 5xx → 计划转向下游依赖与 DB 慢查询。</p><p><b>② 工具失败</b>：Loki 连续超时 3 次被熔断 → 放弃日志方向，走替代路径（指标+知识库案例佐证）。</p><p><b>③ 结果冲突</b>：指标显示服务可用但日志大量报连接超时 → 冲突本身是新信号，加查连接池指标交叉验证。</p><p>重新规划要求全局视角——这正是 Planner/Executor 分离的意义：Planner 的上下文里只有摘要反馈，没有十几轮原始 JSON 干扰。</p>`,
+},
+'n-judge': {t:'Planner 终局三分支', s:'decision=FINISH | PLAN(Replan) | 被迫 FINISH',
+ d:`<pre class="json">证据充分  → decision=FINISH → 输出报告
+证据不足/冲突 → decision=PLAN  → Replan 循环
+预算耗尽  → 收到 STEP_BUDGET_EXHAUSTED
+          → 被迫 FINISH → 报告标注未完成项</pre>`,
+},
+'n-report': {t:'固定模板报告', s:'buildPlannerPrompt 内嵌模板',
+ d:`<pre class="json"># 告警分析报告
+## 📋 活跃告警清单        ← 表格：告警/级别/服务/触发时间/状态
+## 🔍 告警根因分析N       ← 告警详情/症状/日志证据/根因结论
+## 🛠️ 处理方案执行N       ← 已执行步骤/处理建议/预期效果
+## 📊 结论               ← 整体评估/关键发现/后续建议/风险评估</pre><p>模板写死在提示词里，保证输出结构稳定可解析；预算耗尽时在此如实说明未完成部分——诚实反馈是设计约束，不是可选项。</p>`,
+},
+'n-finish': {t:'收尾三件事', s:'endTrace / Micrometer / SSE',
+ d:`<p>① endTrace 汇总：<code>[TRACE-END] sessionId=aiops-xxx status=OK durationMs=214000 llmSpans=9 toolSpans=6 totalTokens=48200</code>；token 同步上报 <code>aiops_llm_tokens_total{model,type=prompt|completion}</code> 与 <code>aiops_llm_calls_total{model}</code>（Grafana 按模型聚合×单价=成本）。② 报告 50 字符/块 SSE 推送 → done → complete。③ endSession 结算预算（防内存泄漏）。</p>`,
+},
+};
+
+// ==================== 剧本（真实日志格式） ====================
+const scripts = [
+// 剧本① 顺利路径
+[
+['n-user','user|收到 AI 智能运维请求 - 启动多 Agent 协作流程','info'],
+['n-async','sys|SSE 建立(600000ms) → executor.execute 提交线程池，Tomcat 线程释放','info'],
+['n-init','sys|AI Ops 模型路由: Planner/Supervisor=qwen3.7-max, Executor=qwen-plus','hi'],
+['n-init','trace|[TRACE-START] sessionId=aiops-8f3a... type=AI_OPS','hi'],
+['n-init','guard|[STEP-GUARD] 会话预算开启 maxToolCalls=18 failThreshold=3','warn'],
+['n-sup','sup|Supervisor(LLM路由) → 调度 planner_agent 拆解任务','hi'],
+['n-plan','plan|decision=PLAN：①查活跃告警 ②查5xx指标 ③查错误日志 ④查SOP/案例','hi'],
+['n-sup','sup|decision=EXECUTE → 调度 executor_agent','hi'],
+['n-exec','exec|Thought: 先确认告警范围，调用 queryPrometheusAlerts','hi'],
+['n-guard','guard|tryAcquire(queryPrometheusAlerts) → 放行 [1/18]','warn'],
+['n-tool','tool|queryPrometheusAlerts → 3 个 firing（HighCPUUsage/HighMemoryUsage/SlowResponse）','tool'],
+['n-trace','trace|Span TOOL_CALL queryPrometheusAlerts 213ms OK · recordResult(success) 计数清零','info'],
+['n-guard','guard|tryAcquire(queryMetric) → 放行 [2/18]','warn'],
+['n-tool','tool|queryMetric(P99) → 原始 47 样本，截断保留 20（total_samples=47）【第一层压缩】','tool'],
+['n-guard','guard|tryAcquire(queryLogs) → 放行 [3/18]','warn'],
+['n-tool','tool|queryLogs({service="order-service"} |= "5xx") → 20条，集中于 DB 连接超时','tool'],
+['n-compress','exec|executor_feedback(LLM摘要)：status=SUCCESS summary=47条5xx集中DB连接超时【第二层压缩】','hi'],
+['n-sup','sup|Supervisor → planner_agent 评估证据','hi'],
+['n-judge','plan|证据链完整（告警+指标+日志交叉验证）→ decision=FINISH','ok'],
+['n-report','plan|按固定模板生成《告警分析报告》（根因：连接池耗尽引发 5xx）','ok'],
+['n-finish','trace|[TRACE-END] status=OK llmSpans=9 toolSpans=3 totalTokens=48200 → SSE 分块推送报告 → done','ok'],
+],
+// 剧本② Replan
+[
+['n-user','user|场景：指标正常但 5xx 依旧 → 证据缺失触发 Replan','info'],
+['n-init','sys|初始化完成：双模型路由 + Trace + 预算 18/3','info'],
+['n-sup','sup|Supervisor → planner_agent','hi'],
+['n-plan','plan|decision=PLAN：①查告警 ②查CPU/内存 ③查5xx日志','hi'],
+['n-exec','exec|执行：queryPrometheusAlerts → 2 个 firing','hi'],
+['n-guard','guard|tryAcquire(queryMetric) [2/18]','warn'],
+['n-tool','tool|queryMetric(CPU) → 32%（正常）｜queryMetric(内存) → 61%（正常）','tool'],
+['n-compress','exec|executor_feedback：指标全部正常，无法解释 5xx','hi'],
+['n-judge','plan|【证据缺失】CPU/内存正常但解释不了症状 → decision=PLAN 调整方向','warn'],
+['n-replan','plan|REPLAN：转向下游依赖 → 查 DB 慢查询 + 连接池指标 + 知识库历史案例','warn'],
+['n-exec','exec|执行新计划：queryLogs 慢查询日志 → 3 条 2s+ 慢 SQL','hi'],
+['n-tool','tool|queryMetric(连接池) → active 50/50, waiting 23 ← 与日志交叉验证','tool'],
+['n-judge','plan|【结果冲突→新信号】服务层指标正常 vs 连接池打满 → 锁定根因方向','warn'],
+['n-guard','guard|tryAcquire(queryInternalDocs) [6/18]','warn'],
+['n-tool','tool|queryInternalDocs(service=order-service) → 命中 OOM 历史案例（docType=case）','tool'],
+['n-judge','plan|证据链闭环：慢SQL→连接池耗尽→5xx，且命中历史案例佐证 → FINISH','ok'],
+['n-report','plan|报告：根因=慢SQL占用连接→池耗尽→5xx；处理=加索引+池扩容（引用 SOP）','ok'],
+['n-finish','trace|[TRACE-END] toolSpans=6 totalTokens=61700（Replan 多花 2 轮，换来源自证据的结论）','ok'],
+],
+// 剧本③ 预算耗尽收敛
+[
+['n-user','user|场景：Loki 故障 + 反复试错 → 熔断与预算耗尽的收敛行为','info'],
+['n-init','sys|初始化：预算 18/3，Loki 服务端宕机（模拟）','info'],
+['n-plan','plan|decision=PLAN：查告警 → 查日志 → 查SOP','hi'],
+['n-tool','tool|queryPrometheusAlerts → 2 个 firing [1/18]','tool'],
+['n-guard','guard|tryAcquire(queryLogs) [2/18]','warn'],
+['n-tool','tool|queryLogs → ERROR: Loki HTTP 502','err'],
+['n-guard','guard|recordResult(queryLogs, fail) 连续失败 x1','err'],
+['n-tool','tool|queryLogs(重试) → ERROR: Loki HTTP 502 [3/18] 连续失败 x2','err'],
+['n-tool','tool|queryLogs(再重试) → ERROR [4/18] 连续失败 x3','err'],
+['n-guard','guard|[STEP-GUARD] 工具 queryLogs 连续失败 3 次，触发熔断（本会话不再放行）','err'],
+['n-judge','plan|【工具失败→Replan】放弃日志方向，改走 指标+知识库 佐证','warn'],
+['n-tool','tool|queryMetric ×4（逐一排查 CPU/内存/磁盘/连接池）[8/18]','tool'],
+['n-tool','tool|queryInternalDocs ×2（换关键词反复检索）[10/18]','tool'],
+['n-plan','plan|证据仍不充分，模型持续尝试新组合… [11-18/18]','warn'],
+['n-guard','guard|[STEP-GUARD] 总预算耗尽 used=18/18，拒绝后续工具调用','err'],
+['n-tool','tool|返回收敛信号：{"reason":"STEP_BUDGET_EXHAUSTED","message":"请基于已有证据输出最终报告..."}}','err'],
+['n-judge','plan|收到收敛信号 → 被迫 FINISH（不是报错失败）','warn'],
+['n-report','plan|报告：基于已有指标给出初步结论 + 如实标注"日志方向因 Loki 故障未能完成"','ok'],
+['n-finish','trace|[TRACE-END] status=OK toolSpans=18(预算打满) → 超限语义=收敛：带证据交付，不无限烧钱','ok'],
+],
+];
+
+// ==================== 引擎（手动单步模式） ====================
+let cur = 0, stepIdx = 0, budgetUsed = 0;
+const $ = id => document.getElementById(id);
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active'); cur = +t.dataset.s; reset();
+});
+document.querySelectorAll('.node,.loopback').forEach(n => n.onclick = () => showDetail(n.id));
+function showDetail(id){
+  const d = D[id]; if(!d) return;
+  $('detail').innerHTML = `<h3>${d.t}</h3><div class="src">📍 ${d.s}</div>${d.d}`;
+}
+function log(msg, cls){
+  const div = document.createElement('div');
+  div.className = 'logline lg-' + cls;
+  div.textContent = msg;
+  $('cbody').appendChild(div);
+  $('cbody').scrollTop = $('cbody').scrollHeight;
+}
+function updateBudget(txt){ $('budgetStatus').textContent = txt; }
+/** 按钮文案与进度：显示当前步/总步数，播完自动禁用 */
+function syncBtn(){
+  const total = scripts[cur].length;
+  $('btnPlay').textContent = stepIdx >= total
+    ? '✓ 播放完毕（' + total + '/' + total + '）'
+    : '▶ 下一步（' + stepIdx + '/' + total + '）';
+  $('btnPlay').disabled = stepIdx >= total;
+}
+function reset(){
+  document.querySelectorAll('.node').forEach(n => n.classList.remove('active','done','rejected'));
+  $('cbody').innerHTML = ''; budgetUsed = 0; stepIdx = 0;
+  updateBudget('预算 0/18 · 熔断 -');
+  syncBtn();
+}
+/** 单步执行：消费剧本中的一条（高亮节点 + 滚动 + 日志 + 预算栏），不自动推进 */
+function stepNext(){
+  const steps = scripts[cur];
+  if(stepIdx >= steps.length) return;
+  const [nodeId, text, cls] = steps[stepIdx++];
+  document.querySelectorAll('.node.active').forEach(n => {
+    n.classList.remove('active');
+    n.classList.add(cls === 'err' ? 'rejected' : 'done');
+  });
+  const el = $(nodeId);
+  if(el){ el.classList.add('active'); el.scrollIntoView({block:'center', behavior:'smooth'}); }
+  log(text, cls);
+  const m = text.match(/\[(\d+)\/18\]/);
+  if(m){ budgetUsed = +m[1]; updateBudget('预算 ' + m[1] + '/18 · 熔断 -'); }
+  if(text.includes('熔断')) updateBudget('预算 ' + (budgetUsed || '…') + '/18 · queryLogs 已熔断');
+  syncBtn();
+}
+$('btnReset').onclick = reset;
+$('btnPlay').onclick = stepNext;
+// 空格/回车 = 下一步（演示时解放鼠标；方向键←→切剧本可自行扩展）
+document.addEventListener('keydown', e => {
+  if(e.code === 'Space' || e.code === 'Enter'){
+    e.preventDefault();
+    if(!$('btnPlay').disabled) stepNext();
+  }
+});
+reset();
+</script>
+</body>
+</html>

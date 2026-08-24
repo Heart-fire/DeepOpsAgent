@@ -28,7 +28,7 @@ import java.util.Map;
  *   INSERT 消息 → UPSERT 会话 → 超窗消息滚动摘要（滞后 2 对触发，避免每轮 LLM 调用）→ 刷新 Redis 窗口。
  * 读路径：Redis hit 直接返回；miss 查 MySQL 回填。
  *
- * 一致性口径（面试话术）：
+ * 一致性口径：
  *   MySQL 写成功才算成功；Redis 刷新失败只告警不回滚（缓存可重建，容忍短暂陈旧）。
  *   Redis 全丢 = 多几次 MySQL 回源，语义无损。
  */

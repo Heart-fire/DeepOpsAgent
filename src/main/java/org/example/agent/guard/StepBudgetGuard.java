@@ -6,24 +6,16 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Agent 步数预算守卫（最大步数限制的代码级实现）。
+ * Agent 步数预算守卫：工具调用总次数限流（aiops.max-tool-calls）
+ * + 同一工具连续失败熔断（aiops.tool-fail-threshold）。
  *
- * 设计要点：
- * 1) 两层熔断，对应简历里"最大步数限制避免无效循环"：
- *    a. 总量预算：一次诊断会话所有工具调用总次数达到 {@code aiops.max-tool-calls} 后，
- *       后续工具调用直接返回结构化收敛信号，迫使模型带着已有证据 FINISH；
- *    b. 单工具熔断：同一工具连续失败达到 {@code aiops.tool-fail-threshold} 次后熔断该工具
- *       （把原来只写在提示词里的"同一工具失败 3 次停止"变成代码硬限，模型不听 prompt 也拦得住）。
- * 2) 超限语义是"收敛"不是"失败"：返回的 JSON 明确告诉模型预算耗尽、
- *    应基于已收集证据输出最终报告并说明未完成部分，与提示词里的诚实反馈要求一致。
- * 3) 生命周期对齐 {@code AgentTraceRecorder}：sessionId + volatile currentSessionId
- *    （@Tool 方法在 Reactor 异步线程调用，演示级单用户实现，多并发需换 Reactor Context）。
- * 4) 拦截位置：各 @Tool 方法入口调用 {@link #tryAcquire(String)}（预算在执行前扣减），
- *    在记录 trace 的 finally 里调用 {@link #recordResult(String, boolean)} 回报成败。
+ * 超限语义是"收敛"而非"失败"：返回结构化信号要求模型停止调用工具，
+ * 基于已有证据输出最终结论并说明未完成部分。
+ * 工具方法入口 tryAcquire 扣减预算，finally 中 recordResult 回报成败；
+ * 生命周期与 AgentTraceRecorder 对齐（beginSession/endSession）。
  */
 @Component
 public class StepBudgetGuard {

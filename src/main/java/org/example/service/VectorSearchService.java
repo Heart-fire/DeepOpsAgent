@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
  *      （错误码、异常类名、服务名——dense 容易丢的信号）；
  *   4) RRF 融合：score = Σ 1/(rrf-k + rank)，两路排名融合取 TopK。
  *
- * 为什么 Sparse 在应用层（面试口径）：
+ * 为什么 Sparse 在应用层：
  *   Milvus 原生 BM25 需要 SparseFloatVector 字段 + Function 并重灌全量数据，
  *   演示规模（数百分片）下应用层 BM25（候选池 ≤ sparse-candidate-limit）成本更低、
  *   效果等价；生产规模切换 Milvus 原生 BM25 / ES，本方法对外签名不变。
